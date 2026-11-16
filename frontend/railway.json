@@ -1,5 +1,8 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "buildCommand": "npm install && npm run build"
+  },
   "deploy": {
     "startCommand": "npx -y serve -s dist -l $PORT",
     "restartPolicyType": "ON_FAILURE",

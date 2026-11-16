@@ -1,0 +1,25 @@
+{
+  "name": "repushield",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RepuShield - Reputation Monitoring System",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:all": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "build": "cd backend && npm install --legacy-peer-deps && npm run build",
+    "build:frontend": "npm run build --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "start": "cd backend && npm start",
+    "install:all": "npm install && npm install --workspace=frontend && npm install --workspace=backend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
+

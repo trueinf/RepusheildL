@@ -1,0 +1,160 @@
+import cron from 'node-cron';
+import { ConfigurationService } from './configurationService.js';
+import { AgentOrchestrator } from './agentOrchestrator.js';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+type MonitoringStatus = 'running' | 'paused' | 'stopped';
+
+export class PostFetchScheduler {
+  private orchestrator: AgentOrchestrator;
+  private intervalMinutes: number;
+  private cronJob: cron.ScheduledTask | null = null;
+  private status: MonitoringStatus = 'running';
+  private lastRunTime: Date | null = null;
+  private nextRunTime: Date | null = null;
+
+  constructor(
+    rapidApiKey: string,
+    serpApiKey: string,
+    openaiApiKey: string,
+    intervalMinutes: number = 10
+  ) {
+    this.orchestrator = new AgentOrchestrator(rapidApiKey, serpApiKey, openaiApiKey);
+    this.intervalMinutes = intervalMinutes;
+  }
+
+  start(): void {
+    if (this.status === 'stopped') {
+      this.status = 'running';
+    }
+    
+    if (this.cronJob) {
+      this.cronJob.stop();
+    }
+    
+    const cronExpression = `*/${this.intervalMinutes} * * * *`;
+
+    this.cronJob = cron.schedule(cronExpression, async () => {
+      if (this.status === 'running') {
+        console.log(`[Scheduler] Running fetch job at ${new Date().toISOString()}`);
+        this.lastRunTime = new Date();
+        this.calculateNextRunTime();
+        await this.fetchAllActiveConfigurations();
+      } else {
+        console.log(`[Scheduler] Skipped - Status: ${this.status}`);
+      }
+    });
+
+    this.calculateNextRunTime();
+    console.log(`[Scheduler] Started. Fetching every ${this.intervalMinutes} minutes. Status: ${this.status}`);
+  }
+
+  pause(): void {
+    this.status = 'paused';
+    console.log('[Scheduler] Paused. Monitoring will skip scheduled runs.');
+  }
+
+  resume(): void {
+    this.status = 'running';
+    this.calculateNextRunTime();
+    console.log('[Scheduler] Resumed. Monitoring will continue.');
+  }
+
+  stop(): void {
+    this.status = 'stopped';
+    if (this.cronJob) {
+      this.cronJob.stop();
+      this.cronJob = null;
+    }
+    console.log('[Scheduler] Stopped.');
+  }
+
+  getStatus(): { status: MonitoringStatus; lastRunTime: Date | null; nextRunTime: Date | null; intervalMinutes: number } {
+    return {
+      status: this.status,
+      lastRunTime: this.lastRunTime,
+      nextRunTime: this.nextRunTime,
+      intervalMinutes: this.intervalMinutes,
+    };
+  }
+
+  private calculateNextRunTime(): void {
+    if (this.status === 'running' && this.intervalMinutes > 0) {
+      const now = new Date();
+      this.nextRunTime = new Date(now.getTime() + this.intervalMinutes * 60 * 1000);
+    } else {
+      this.nextRunTime = null;
+    }
+  }
+
+  async fetchAllActiveConfigurations(): Promise<void> {
+    try {
+      const configs = ConfigurationService.getAll();
+      const activeConfigs = configs.filter(c => c.isActive);
+
+      if (activeConfigs.length === 0) {
+        console.log('[Scheduler] No active configurations found.');
+        return;
+      }
+
+      console.log(`[Scheduler] Found ${activeConfigs.length} active configuration(s).`);
+
+      for (const config of activeConfigs) {
+        try {
+          console.log(`[Scheduler] Fetching posts for configuration: ${config.id}`);
+          const result = await this.orchestrator.executeParallel(config);
+          
+          console.log(`[Scheduler] Completed for ${config.id}:`, {
+            fetched: result.totalPostsFetched,
+            stored: result.totalPostsStored,
+            errors: result.errors.length,
+          });
+
+          if (result.errors.length > 0) {
+            console.error(`[Scheduler] Errors for ${config.id}:`, result.errors);
+          }
+        } catch (error: any) {
+          console.error(`[Scheduler] Error processing config ${config.id}:`, error.message);
+        }
+      }
+    } catch (error: any) {
+      console.error('[Scheduler] Fatal error:', error.message);
+    }
+  }
+
+  async triggerManualFetch(configurationId: string): Promise<void> {
+    const config = ConfigurationService.getById(configurationId);
+    if (!config) {
+      throw new Error(`Configuration ${configurationId} not found`);
+    }
+    
+    if (!config.isActive) {
+      console.warn(`[Scheduler] Configuration ${configurationId} is not active. Activating it...`);
+      ConfigurationService.activate(configurationId);
+    }
+
+    console.log(`[Scheduler] Manual fetch triggered for ${configurationId}`);
+    console.log(`[Scheduler] Configuration details:`, {
+      id: config.id,
+      entityName: config.entityDetails.name,
+      platforms: config.platformConfig.platforms,
+      keywords: config.ontology.coreKeywords.slice(0, 3),
+    });
+    
+    const result = await this.orchestrator.executeParallel(config);
+    
+    console.log(`[Scheduler] ✅ Manual fetch completed for ${configurationId}:`, {
+      totalFetched: result.totalPostsFetched,
+      totalStored: result.totalPostsStored,
+      errors: result.errors.length,
+      duration: `${result.duration}ms`,
+    });
+    
+    if (result.errors.length > 0) {
+      console.error(`[Scheduler] Errors during fetch:`, result.errors);
+    }
+  }
+}
+
